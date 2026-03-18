@@ -22,6 +22,7 @@ export async function preScan(projectDir: string): Promise<{
   // Try to import SovGuard — graceful fallback if not available
   let sovguardEngine: any = null;
   try {
+    // @ts-ignore — optional peer dependency, not installed in all environments
     const { SovGuardEngine } = await import('@sovguard/engine');
     sovguardEngine = new SovGuardEngine({ blockThreshold: 0.7, suspiciousThreshold: 0.3 });
   } catch {

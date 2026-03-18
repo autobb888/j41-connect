@@ -8,7 +8,7 @@
 import { createInterface, Interface } from 'readline';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
-import { createStructuredPatch } from 'diff';
+import { structuredPatch } from 'diff';
 import chalk from 'chalk';
 import { DIFF_PREVIEW_LINES } from './types.js';
 import type { InputState } from './types.js';
@@ -75,9 +75,9 @@ export class Supervisor {
       : '';
 
     // Generate diff
-    const patch = createStructuredPatch(path, path, currentContent, proposedContent);
-    const diffLines = patch.hunks.flatMap((hunk) =>
-      hunk.lines.map((line) => {
+    const patch = structuredPatch(path, path, currentContent, proposedContent);
+    const diffLines = patch.hunks.flatMap((hunk: { lines: string[] }) =>
+      hunk.lines.map((line: string) => {
         if (line.startsWith('+')) return chalk.green(line);
         if (line.startsWith('-')) return chalk.red(line);
         return chalk.gray(line);

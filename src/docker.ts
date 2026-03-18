@@ -8,7 +8,7 @@
 import Docker from 'dockerode';
 import { resolve, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { Writable, Readable } from 'stream';
+import { Writable, Readable, PassThrough } from 'stream';
 import chalk from 'chalk';
 
 const CONTAINER_NAME_PREFIX = 'j41-connect-';
@@ -85,7 +85,8 @@ export class DockerManager {
     await this.container.start();
 
     // Demux stdout/stderr from the multiplexed stream
-    const stdout = new Readable({ read() {} });
+    // PassThrough is both readable and writable — required by dockerode's demuxStream
+    const stdout = new PassThrough();
     const stderr = new Writable({
       write(chunk, _encoding, callback) {
         // Log stderr from container (debug info)
