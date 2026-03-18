@@ -104,6 +104,17 @@ export class DockerManager {
     };
   }
 
+  /** Monitor container health — calls onExit when container stops unexpectedly */
+  onContainerExit(callback: (exitCode: number) => void): void {
+    if (!this.container) return;
+    this.container.wait().then((data: any) => {
+      const code = data?.StatusCode ?? 1;
+      callback(code);
+    }).catch(() => {
+      callback(1);
+    });
+  }
+
   async stop(): Promise<void> {
     if (!this.container) return;
 

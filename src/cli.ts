@@ -3,10 +3,9 @@
  */
 
 import { Command } from 'commander';
-import { existsSync, statSync, readFileSync } from 'fs';
-import { resolve, relative, join } from 'path';
+import { existsSync, statSync } from 'fs';
+import { resolve } from 'path';
 import { execSync } from 'child_process';
-import { createHash } from 'crypto';
 import chalk from 'chalk';
 import type { WorkspaceConfig, McpCall, McpResult, ExclusionEntry, OperationMetadata } from './types.js';
 import { MAX_SESSION_TRANSFER } from './types.js';
@@ -119,11 +118,13 @@ export async function run(config: WorkspaceConfig): Promise<void> {
 
   // ── Cleanup function (used by signals + normal exit) ─────────
   let cleanedUp = false;
+  let stdModeRl: any = null; // readline for standard mode cleanup
   async function cleanup() {
     if (cleanedUp) return;
     cleanedUp = true;
     feed.printSummary();
     supervisor?.close();
+    stdModeRl?.close();
     relay.disconnect();
     await docker.stop();
   }
@@ -168,6 +169,13 @@ export async function run(config: WorkspaceConfig): Promise<void> {
     const mcpServerPath = getMcpServerPath();
     const { stdin: dockerStdin, stdout: dockerStdout } = await docker.start(config.projectDir, mcpServerPath);
     feed.logStatus('Docker container running');
+
+    // I3 fix: monitor container health — detect crashes
+    docker.onContainerExit((exitCode) => {
+      feed.logError(`Docker container exited unexpectedly (code ${exitCode})`);
+      relay.sendAbort();
+      cleanup().then(() => process.exit(1));
+    });
 
     // Buffer for reading JSON-RPC responses from MCP server
     let mcpBuffer = '';
@@ -267,6 +275,25 @@ export async function run(config: WorkspaceConfig): Promise<void> {
     relay.onMcpCallReceived(async (call: McpCall) => {
       const toolName = call.tool;
       const relPath = call.params?.path || '.';
+
+      // I5 fix: enforce --write permission
+      if (toolName === 'write_file' && !config.permissions.write) {
+        const meta: OperationMetadata = {
+          operation: 'write',
+          path: relPath,
+          sovguardScore: 0,
+          blocked: true,
+          blockReason: 'write permission not granted (run with --write)',
+        };
+        feed.logOperation(meta);
+        relay.sendResult({
+          id: call.id,
+          success: false,
+          error: 'Write permission not granted',
+          metadata: meta,
+        });
+        return;
+      }
 
       // Check exclusion list
       if (isExcluded(relPath, exclusions)) {
@@ -397,8 +424,8 @@ export async function run(config: WorkspaceConfig): Promise<void> {
     } else {
       // Standard mode — simple command reader
       const { createInterface: createRL } = await import('readline');
-      const rl = createRL({ input: process.stdin, terminal: false });
-      rl.on('line', (line) => {
+      stdModeRl = createRL({ input: process.stdin, terminal: false });
+      stdModeRl.on('line', (line: string) => {
         const cmd = line.trim().toLowerCase();
         switch (cmd) {
           case 'pause': relay.sendPause(); feed.logStatus('Pausing...'); break;
