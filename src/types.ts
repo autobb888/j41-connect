@@ -1,0 +1,76 @@
+/**
+ * Shared types and constants for j41-connect
+ */
+
+// ── Constants ───────────────────────────────────────────────────
+
+export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+export const MAX_SESSION_TRANSFER = 500 * 1024 * 1024; // 500MB
+export const MAX_DIR_ENTRIES = 10_000;
+export const DIFF_PREVIEW_LINES = 20;
+export const RECONNECT_GRACE_SECONDS = 300; // 5 minutes
+
+// Patterns to auto-exclude during pre-scan
+export const AUTO_EXCLUDE_PATTERNS = [
+  '.env', '.env.*',
+  '.ssh/', '.gnupg/',
+  '*.pem', '*.key', '*.p12',
+  'credentials.json', 'secrets.*',
+  'node_modules/', '.git/',
+  '.DS_Store', 'Thumbs.db',
+];
+
+// ── Types ───────────────────────────────────────────────────────
+
+export type WorkspaceMode = 'supervised' | 'standard';
+
+export interface WorkspaceConfig {
+  projectDir: string;
+  uid: string;
+  resumeToken?: string;
+  permissions: { read: boolean; write: boolean };
+  mode: WorkspaceMode;
+  verbose: boolean;
+  apiUrl: string;
+}
+
+export interface ExclusionEntry {
+  path: string;
+  reason: string;
+}
+
+export interface OperationMetadata {
+  operation: 'read' | 'write' | 'list_dir';
+  path: string;
+  sizeBytes?: number;
+  contentHash?: string;
+  sovguardScore: number;
+  approved?: boolean;
+  blocked?: boolean;
+  blockReason?: string;
+}
+
+export interface McpCall {
+  id: string;
+  tool: string;
+  params: Record<string, any>;
+}
+
+export interface McpResult {
+  id: string;
+  success: boolean;
+  result?: any;
+  error?: string;
+  metadata: OperationMetadata;
+}
+
+export interface SessionStats {
+  reads: number;
+  writes: number;
+  blocked: number;
+  totalBytes: number;
+  startedAt: number;
+}
+
+// Stdin state machine for command/approval coexistence
+export type InputState = 'IDLE' | 'APPROVAL_PENDING';
