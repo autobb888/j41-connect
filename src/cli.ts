@@ -18,7 +18,7 @@ import { Feed } from './feed.js';
 import { createInterface } from 'readline';
 
 const J41_API_URL = process.env.J41_API_URL || 'https://api.autobb.app';
-const SOVGUARD_API_URL = process.env.SOVGUARD_API_URL || 'https://api.sovguard.com';
+const SOVGUARD_API_URL = process.env.SOVGUARD_API_URL || 'https://safechat.autobb.app';
 
 export function parseArgs(argv: string[]): WorkspaceConfig {
   const program = new Command();
@@ -103,8 +103,19 @@ function isDockerAvailable(): boolean {
 
 function readSecret(prompt: string): Promise<string> {
   return new Promise((resolve) => {
-    process.stdout.write(prompt);
     const stdin = process.stdin;
+
+    // Non-TTY (piped input, CI) — fall back to readline
+    if (!stdin.isTTY || typeof stdin.setRawMode !== 'function') {
+      const rl = createInterface({ input: stdin, output: process.stdout });
+      rl.question(prompt, (answer) => {
+        rl.close();
+        resolve(answer);
+      });
+      return;
+    }
+
+    process.stdout.write(prompt);
     const wasRaw = stdin.isRaw;
     stdin.setRawMode(true);
     stdin.resume();

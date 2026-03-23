@@ -30,9 +30,9 @@ export class Feed {
       return;
     }
 
-    if (meta.operation === 'read' || meta.operation === 'list_dir') {
+    if (['read', 'read_file', 'list_dir', 'list_directory', 'search', 'search_files', 'get_file_info', 'directory_tree'].includes(meta.operation)) {
       this.stats.reads++;
-    } else if (meta.operation === 'write') {
+    } else if (meta.operation === 'write' || meta.operation === 'write_file') {
       this.stats.writes++;
     }
 
@@ -80,9 +80,16 @@ export class Feed {
 
   private formatOp(op: string): string {
     switch (op) {
-      case 'read': return chalk.blue('READ  ');
-      case 'write': return chalk.yellow('WRITE ');
-      case 'list_dir': return chalk.gray('LIST  ');
+      case 'read':
+      case 'read_file': return chalk.blue('READ  ');
+      case 'write':
+      case 'write_file': return chalk.yellow('WRITE ');
+      case 'list_dir':
+      case 'list_directory':
+      case 'directory_tree': return chalk.gray('LIST  ');
+      case 'search':
+      case 'search_files': return chalk.magenta('SEARCH');
+      case 'get_file_info': return chalk.gray('INFO  ');
       default: return op.padEnd(6);
     }
   }

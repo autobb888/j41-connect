@@ -7,7 +7,7 @@
  */
 
 import { readdirSync, readFileSync, statSync } from 'fs';
-import { join, relative } from 'path';
+import { join, relative, extname } from 'path';
 import { createHash } from 'crypto';
 import { createInterface } from 'readline';
 import chalk from 'chalk';
@@ -18,6 +18,24 @@ interface SovGuardConfig {
   apiKey: string;
   apiUrl: string;
 }
+
+// File extensions worth scanning via cloud API (text/structured content)
+const SCANNABLE_EXTENSIONS = new Set([
+  '.txt', '.md', '.json', '.yaml', '.yml', '.toml', '.ini', '.cfg',
+  '.csv', '.tsv', '.xml', '.html', '.htm', '.js', '.ts', '.jsx', '.tsx',
+  '.py', '.rb', '.sh', '.bash', '.zsh', '.sql', '.go', '.rs', '.java',
+  '.conf', '.properties', '.log',
+]);
+
+const MIME_MAP: Record<string, string> = {
+  '.json': 'application/json', '.yaml': 'text/yaml', '.yml': 'text/yaml',
+  '.xml': 'application/xml', '.html': 'text/html', '.htm': 'text/html',
+  '.csv': 'text/csv', '.md': 'text/markdown',
+};
+
+// Max file size for cloud scan (100KB)
+const SCAN_MAX_BYTES = 100 * 1024;
+const SCAN_TIMEOUT_MS = 5000;
 
 export async function preScan(projectDir: string, sovguard?: SovGuardConfig): Promise<{
   exclusions: ExclusionEntry[];
@@ -32,16 +50,22 @@ export async function preScan(projectDir: string, sovguard?: SovGuardConfig): Pr
   // Walk directory (skip auto-excluded dirs)
   walkDir(projectDir, projectDir, allFiles, exclusions);
 
-  // Scan remaining files with SovGuard API
+  // Scan remaining files via SovGuard cloud API (L6 File Scan)
   if (sovguard) {
+    let scanned = 0;
     for (const filePath of allFiles) {
       try {
         const relPath = relative(projectDir, filePath);
+        const ext = extname(filePath).toLowerCase();
+        if (!SCANNABLE_EXTENSIONS.has(ext)) continue; // only text/structured content
+
         const stat = statSync(filePath);
-        if (stat.size > 10 * 1024 * 1024) continue; // skip >10MB files
+        if (stat.size > SCAN_MAX_BYTES) continue;
 
         const content = readFileSync(filePath);
-        const result = await scanWithSovGuard(sovguard, relPath, content);
+        const mimeType = MIME_MAP[ext] || 'text/plain';
+        const result = await scanWithSovGuard(sovguard, content, mimeType);
+        scanned++;
 
         if (result && !result.safe) {
           exclusions.push({ path: relPath, reason: `SovGuard flagged (score: ${result.score.toFixed(2)})` });
@@ -53,6 +77,9 @@ export async function preScan(projectDir: string, sovguard?: SovGuardConfig): Pr
         }
         // Can't read/scan file — skip
       }
+    }
+    if (scanned > 0) {
+      console.log(chalk.gray(`  Scanned ${scanned} files via SovGuard cloud\n`));
     }
   }
 
@@ -166,29 +193,38 @@ class SovGuardAuthError extends Error {
 
 async function scanWithSovGuard(
   config: SovGuardConfig,
-  filePath: string,
   content: Buffer,
+  mimeType: string,
 ): Promise<{ safe: boolean; score: number } | null> {
-  const response = await fetch(`${config.apiUrl}/v1/scan`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      file_path: filePath,
-      content: content.toString('base64'),
-      encoding: 'base64',
-    }),
-  });
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
 
-  if (!response.ok) {
-    if (response.status === 401) {
-      throw new SovGuardAuthError();
+  try {
+    const response = await fetch(`${config.apiUrl}/v1/scan/file/content`, {
+      method: 'POST',
+      headers: {
+        'X-API-Key': config.apiKey,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        content: content.toString('base64'),
+        mimeType,
+      }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        throw new SovGuardAuthError();
+      }
+      return null;
     }
-    return null;
-  }
 
-  const data = await response.json() as { safe: boolean; score: number };
-  return data;
+    return await response.json() as { safe: boolean; score: number };
+  } catch (err) {
+    if (err instanceof SovGuardAuthError) throw err;
+    return null; // Timeout or network error — skip
+  } finally {
+    clearTimeout(timer);
+  }
 }
