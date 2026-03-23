@@ -15,7 +15,10 @@ import { RelayClient } from './relay-client.js';
 import { Supervisor } from './supervisor.js';
 import { Feed } from './feed.js';
 
+import { createInterface } from 'readline';
+
 const J41_API_URL = process.env.J41_API_URL || 'https://api.autobb.app';
+const SOVGUARD_API_URL = process.env.SOVGUARD_API_URL || 'https://api.sovguard.com';
 
 export function parseArgs(argv: string[]): WorkspaceConfig {
   const program = new Command();
@@ -32,6 +35,8 @@ export function parseArgs(argv: string[]): WorkspaceConfig {
     .option('--supervised', 'Approve each write action (default)')
     .option('--standard', 'Agent works freely, buyer watches feed')
     .option('--verbose', 'Show file sizes and details in feed')
+    .option('--sovguard-key <key>', 'SovGuard API key for file scanning')
+    .option('--sovguard-url <url>', 'SovGuard API URL')
     .parse(argv);
 
   const opts = program.opts();
@@ -71,6 +76,10 @@ export function parseArgs(argv: string[]): WorkspaceConfig {
   // Determine mode
   const mode = opts.standard ? 'standard' : 'supervised';
 
+  // SovGuard config: CLI flag > env var > prompt
+  const sovguardApiKey = opts.sovguardKey || process.env.SOVGUARD_API_KEY;
+  const sovguardApiUrl = opts.sovguardUrl || process.env.SOVGUARD_API_URL || SOVGUARD_API_URL;
+
   return {
     projectDir,
     uid: opts.uid || '',
@@ -79,6 +88,7 @@ export function parseArgs(argv: string[]): WorkspaceConfig {
     mode,
     verbose: !!opts.verbose,
     apiUrl: J41_API_URL,
+    sovguard: sovguardApiKey ? { apiKey: sovguardApiKey, apiUrl: sovguardApiUrl } : undefined,
   };
 }
 
@@ -89,6 +99,64 @@ function isDockerAvailable(): boolean {
   } catch {
     return false;
   }
+}
+
+function readSecret(prompt: string): Promise<string> {
+  return new Promise((resolve) => {
+    process.stdout.write(prompt);
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw;
+    stdin.setRawMode(true);
+    stdin.resume();
+    stdin.setEncoding('utf-8');
+    let key = '';
+    const onData = (char: string) => {
+      if (char === '\r' || char === '\n') {
+        stdin.setRawMode(wasRaw ?? false);
+        stdin.pause();
+        stdin.removeListener('data', onData);
+        process.stdout.write('\n');
+        resolve(key);
+      } else if (char === '\u0003') { // Ctrl+C
+        stdin.setRawMode(wasRaw ?? false);
+        process.stdout.write('\n');
+        process.exit(1);
+      } else if (char === '\u007f' || char === '\b') { // Backspace
+        key = key.slice(0, -1);
+      } else {
+        key += char;
+      }
+    };
+    stdin.on('data', onData);
+  });
+}
+
+async function promptSovguardConfig(): Promise<WorkspaceConfig['sovguard']> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+
+  const ask = (question: string): Promise<string> =>
+    new Promise((resolve) => rl.question(question, (answer) => resolve(answer.trim())));
+
+  console.log('');
+  console.log(chalk.cyan('SovGuard file scanning protects your workspace from malicious writes.'));
+  rl.close();
+
+  const apiKey = (await readSecret('SovGuard API key (or press Enter to skip): ')).trim();
+
+  if (!apiKey) {
+    return undefined;
+  }
+
+  const rl2 = createInterface({ input: process.stdin, output: process.stdout });
+  const urlAnswer = await new Promise<string>((resolve) =>
+    rl2.question(`SovGuard API URL [${SOVGUARD_API_URL}]: `, (answer) => resolve(answer.trim()))
+  );
+  rl2.close();
+
+  return {
+    apiKey,
+    apiUrl: urlAnswer || SOVGUARD_API_URL,
+  };
 }
 
 export function checkGitStatus(projectDir: string): void {
@@ -156,8 +224,18 @@ export async function run(config: WorkspaceConfig): Promise<void> {
     // ── 1. Git check ───────────────────────────────────────────
     checkGitStatus(config.projectDir);
 
+    // ── 1b. SovGuard API key ─────────────────────────────────
+    if (!config.sovguard) {
+      config.sovguard = await promptSovguardConfig();
+    }
+    if (config.sovguard) {
+      feed.logStatus(`SovGuard file scanning enabled (${config.sovguard.apiUrl})`);
+    } else {
+      console.warn(chalk.yellow('Warning: SovGuard API key not set — file scanning disabled (pattern-only mode)'));
+    }
+
     // ── 2. Pre-scan ────────────────────────────────────────────
-    const scanResult = await preScan(config.projectDir);
+    const scanResult = await preScan(config.projectDir, config.sovguard);
     if (!scanResult.confirmed) {
       console.log('Aborted.');
       process.exit(0);

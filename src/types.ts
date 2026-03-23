@@ -32,6 +32,10 @@ export interface WorkspaceConfig {
   mode: WorkspaceMode;
   verbose: boolean;
   apiUrl: string;
+  sovguard?: {
+    apiKey: string;
+    apiUrl: string;
+  };
 }
 
 export interface ExclusionEntry {
