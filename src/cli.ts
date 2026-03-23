@@ -371,9 +371,8 @@ export async function run(config: WorkspaceConfig): Promise<void> {
         const sizeBytes = mcpMeta.sizeBytes || 0;
         sessionTransferBytes += sizeBytes;
 
-        const operation = toolName === 'list_directory' ? 'list_dir' : toolName;
         const meta: OperationMetadata = {
-          operation: operation as any,
+          operation: toolName as any,
           path: mcpMeta.path || relPath,
           sizeBytes,
           contentHash: mcpMeta.contentHash,

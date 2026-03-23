@@ -40,7 +40,7 @@ export interface ExclusionEntry {
 }
 
 export interface OperationMetadata {
-  operation: 'read' | 'write' | 'list_dir';
+  operation: 'read' | 'read_file' | 'write' | 'write_file' | 'list_dir' | 'list_directory' | 'search' | 'search_files' | 'get_file_info' | 'directory_tree';
   path: string;
   sizeBytes?: number;
   contentHash?: string;
