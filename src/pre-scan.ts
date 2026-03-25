@@ -102,10 +102,21 @@ export async function preScan(projectDir: string, sovguard?: SovGuardConfig): Pr
   }
 
   console.log('');
-  // Note: [E]dit exclusions option deferred to v2 — v1 uses Y/A only
-  const confirmed = await promptConfirm('Proceed? [Y/Enter] yes / [A] abort');
+  const answer = exclusions.length > 0
+    ? await promptChoice('Proceed? [Y/Enter] yes / [A] abort / [E] edit exclusions')
+    : await promptChoice('Proceed? [Y/Enter] yes / [A] abort');
 
-  return { exclusions, directoryHash, confirmed };
+  if (answer === 'e' && exclusions.length > 0) {
+    const kept = await interactiveExclusions(exclusions);
+    // Replace exclusions array in-place
+    exclusions.length = 0;
+    exclusions.push(...kept);
+    console.log(chalk.green(`\n  ${kept.length} exclusion(s) after editing.\n`));
+    const confirmed = await promptConfirm('Proceed? [Y/Enter] yes / [A] abort');
+    return { exclusions, directoryHash, confirmed };
+  }
+
+  return { exclusions, directoryHash, confirmed: answer === 'y' };
 }
 
 function walkDir(
@@ -177,6 +188,95 @@ async function promptConfirm(message: string): Promise<boolean> {
       const a = answer.trim().toLowerCase();
       resolve(a === 'y' || a === 'yes' || a === '');
     });
+  });
+}
+
+async function promptChoice(message: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(`${message} `, (answer) => {
+      rl.close();
+      const a = answer.trim().toLowerCase();
+      if (a === 'a' || a === 'abort') resolve('a');
+      else if (a === 'e' || a === 'edit') resolve('e');
+      else resolve('y');
+    });
+  });
+}
+
+async function interactiveExclusions(exclusions: ExclusionEntry[]): Promise<ExclusionEntry[]> {
+  const selected = new Array(exclusions.length).fill(true); // all excluded by default
+  let cursor = 0;
+
+  return new Promise((resolve) => {
+    const stdin = process.stdin;
+    const wasRaw = stdin.isRaw;
+
+    function render() {
+      // Move cursor up to overwrite previous render
+      if (cursor >= 0) {
+        process.stdout.write(`\x1b[${exclusions.length + 2}A\x1b[J`);
+      }
+      console.log(chalk.cyan('  Edit exclusions — SPACE toggle, ENTER confirm, ESC cancel\n'));
+      for (let i = 0; i < exclusions.length; i++) {
+        const marker = selected[i] ? chalk.red('[x]') : chalk.green('[ ]');
+        const arrow = i === cursor ? chalk.white('> ') : '  ';
+        const name = selected[i] ? chalk.gray(exclusions[i].path) : chalk.white(exclusions[i].path);
+        const reason = chalk.gray(`— ${exclusions[i].reason}`);
+        console.log(`${arrow}${marker} ${name.padEnd(45)} ${reason}`);
+      }
+    }
+
+    // Initial render (print blank lines first so the up-cursor works)
+    for (let i = 0; i < exclusions.length + 2; i++) console.log('');
+    render();
+
+    if (stdin.isTTY) stdin.setRawMode(true);
+    stdin.resume();
+
+    function onData(key: Buffer) {
+      const s = key.toString();
+
+      if (s === '\x1b' || s === 'q') {
+        // ESC or q — cancel, keep original
+        cleanup();
+        resolve(exclusions);
+        return;
+      }
+
+      if (s === '\r' || s === '\n') {
+        // ENTER — confirm
+        cleanup();
+        resolve(exclusions.filter((_, i) => selected[i]));
+        return;
+      }
+
+      if (s === ' ') {
+        // SPACE — toggle
+        selected[cursor] = !selected[cursor];
+        render();
+        return;
+      }
+
+      // Arrow keys
+      if (s === '\x1b[A' || s === 'k') {
+        // UP
+        cursor = Math.max(0, cursor - 1);
+        render();
+      } else if (s === '\x1b[B' || s === 'j') {
+        // DOWN
+        cursor = Math.min(exclusions.length - 1, cursor + 1);
+        render();
+      }
+    }
+
+    function cleanup() {
+      stdin.removeListener('data', onData);
+      if (stdin.isTTY && wasRaw !== undefined) stdin.setRawMode(wasRaw);
+      stdin.pause();
+    }
+
+    stdin.on('data', onData);
   });
 }
 
