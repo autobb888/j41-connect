@@ -374,7 +374,7 @@ export async function run(config: WorkspaceConfig): Promise<void> {
           id: call.id,
           success: false,
           error: `Unknown tool: ${call.tool}`,
-          metadata: { operation: call.tool, blocked: true },
+          metadata: { operation: call.tool as any, path: '', sovguardScore: 0, blocked: true },
         });
         return;
       }
