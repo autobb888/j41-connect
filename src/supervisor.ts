@@ -7,7 +7,7 @@
 
 import { createInterface, Interface } from 'readline';
 import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
+import { join, resolve } from 'path';
 import { structuredPatch } from 'diff';
 import chalk from 'chalk';
 import { DIFF_PREVIEW_LINES } from './types.js';
@@ -73,7 +73,20 @@ export class Supervisor {
     proposedContent: string,
     projectDir: string,
   ): Promise<boolean> {
-    const fullPath = join(projectDir, path);
+    // Prevent path traversal on host filesystem
+    const relPath = path.replace(/^\/+/, '');
+    if (relPath.includes('..') || path.startsWith('/')) {
+      console.log(`\n  Blocked: path traversal attempt: ${path}`);
+      return false;
+    }
+
+    const fullPath = join(projectDir, relPath);
+    const resolved = resolve(fullPath);
+    if (!resolved.startsWith(resolve(projectDir) + '/')) {
+      console.log(`\n  Blocked: path escapes project directory: ${path}`);
+      return false;
+    }
+
     const currentContent = existsSync(fullPath)
       ? readFileSync(fullPath, 'utf-8')
       : '';
