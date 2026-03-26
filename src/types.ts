@@ -12,11 +12,24 @@ export const RECONNECT_GRACE_SECONDS = 300; // 5 minutes
 
 // Patterns to auto-exclude during pre-scan
 export const AUTO_EXCLUDE_PATTERNS = [
-  '.env', '.env.*',
+  // Environment and secrets
+  '.env', '.env.*', 'secrets.*',
+  // SSH and GPG
   '.ssh/', '.gnupg/',
-  '*.pem', '*.key', '*.p12',
-  'credentials.json', 'secrets.*',
+  // Cryptographic keys and certificates
+  '*.pem', '*.key', '*.p12', '*.pfx', '*.jks',
+  // Bare private keys
+  'id_rsa', 'id_ed25519', 'id_ecdsa', 'id_dsa',
+  // Credentials files
+  'credentials.json', 'serviceAccountKey.json', 'gcp-key.json',
+  '.npmrc', '.pypirc', '.netrc', '.htpasswd',
+  // Infrastructure secrets
+  '*.tfvars', '*.tfvars.json',
+  'kubeconfig', '*.kubeconfig',
+  'docker-config.json',
+  // Package and VCS
   'node_modules/', '.git/',
+  // OS metadata
   '.DS_Store', 'Thumbs.db',
 ];
 
