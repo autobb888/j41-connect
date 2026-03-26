@@ -38,6 +38,11 @@ export class Supervisor {
       // abort works with or without / prefix, in any state (backward compat)
       const lower = line.toLowerCase();
       if (lower === 'abort' || lower === '/abort') {
+        // If aborting during approval, resolve pending promise and reset state
+        if (this.state === 'APPROVAL_PENDING') {
+          this.pendingResolve?.(false);
+          this.state = 'IDLE';
+        }
         this.commandHandler?.('abort');
         return;
       }

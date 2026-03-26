@@ -337,10 +337,18 @@ export async function run(config: WorkspaceConfig): Promise<void> {
       cleanup().then(() => process.exit(1));
     });
 
+    let chatHistoryFetched = false;
     relay.onStatusChange((status, data) => {
       switch (status) {
         case 'active':
           feed.logStatus('Workspace active');
+          // Fetch chat history on first 'active' — agentMeta is guaranteed populated here
+          if (!chatHistoryFetched) {
+            chatHistoryFetched = true;
+            relay.fetchChatHistory(15).then((history) => {
+              printChatHistory(history, relay.agentMeta.agentVerusId, relay.agentMeta);
+            });
+          }
           break;
         case 'paused':
           feed.logStatus('Workspace paused');
@@ -562,10 +570,6 @@ export async function run(config: WorkspaceConfig): Promise<void> {
     }
 
     // ── 8. Wire chat ────────────────────────────────────────────
-
-    // Fetch and display chat history
-    const history = await relay.fetchChatHistory(15);
-    printChatHistory(history, relay.agentMeta.agentVerusId, relay.agentMeta);
 
     // Register incoming chat message handler
     relay.onChatMessageReceived((msg) => {
