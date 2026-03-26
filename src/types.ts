@@ -91,3 +91,21 @@ export interface SessionStats {
 
 // Stdin state machine for command/approval coexistence
 export type InputState = 'IDLE' | 'APPROVAL_PENDING';
+
+export interface ChatMessage {
+  id: string;
+  senderVerusId: string;
+  content: string;
+  safetyScore: number | null;
+  safetyWarning: boolean;
+  safetyDetail?: { classification: string; flags: string[] } | null;
+  createdAt: string;
+}
+
+export interface AgentMeta {
+  agentName: string | null;
+  agentVerusId: string | null;
+  modelProvider: string | null;
+  modelName: string | null;
+  jobId: string | null;
+}

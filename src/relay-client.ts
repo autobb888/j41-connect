@@ -7,7 +7,7 @@
 
 import { io, Socket } from 'socket.io-client';
 import chalk from 'chalk';
-import type { McpCall, McpResult, ExclusionEntry } from './types.js';
+import type { McpCall, McpResult, ExclusionEntry, ChatMessage, AgentMeta } from './types.js';
 
 export class RelayClient {
   private socket: Socket | null = null;
@@ -15,6 +15,8 @@ export class RelayClient {
   private onStatusChanged: ((status: string, data?: any) => void) | null = null;
   private onAgentDone: (() => void) | null = null;
   private onError: ((error: { code: string; message: string }) => void) | null = null;
+  private onChatMsg: ((msg: ChatMessage) => void) | null = null;
+  public agentMeta: AgentMeta = { agentName: null, agentVerusId: null, modelProvider: null, modelName: null, jobId: null };
 
   connect(apiUrl: string, auth: { type: string; uid?: string; reconnectToken?: string }): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -41,8 +43,22 @@ export class RelayClient {
         this.onMcpCall?.(data);
       });
 
+      // Chat messages from agent
+      this.socket.on('chat:message', (data: ChatMessage) => {
+        this.onChatMsg?.(data);
+      });
+
       // Status changes
-      this.socket.on('workspace:status_changed', (data: { status: string; reason?: string }) => {
+      this.socket.on('workspace:status_changed', (data: any) => {
+        if (data.agentName !== undefined) {
+          this.agentMeta = {
+            agentName: data.agentName ?? null,
+            agentVerusId: data.agentVerusId ?? null,
+            modelProvider: data.modelProvider ?? null,
+            modelName: data.modelName ?? null,
+            jobId: data.jobId ?? null,
+          };
+        }
         this.onStatusChanged?.(data.status, data);
       });
 
@@ -82,6 +98,10 @@ export class RelayClient {
     });
   }
 
+  sendChatMessage(content: string): void {
+    this.socket?.emit('chat:message', { content });
+  }
+
   sendPause(): void { this.socket?.emit('workspace:pause'); }
   sendResume(): void { this.socket?.emit('workspace:resume'); }
   sendAbort(): void { this.socket?.emit('workspace:abort'); }
@@ -91,6 +111,34 @@ export class RelayClient {
   onStatusChange(handler: (status: string, data?: any) => void): void { this.onStatusChanged = handler; }
   onAgentCompletion(handler: () => void): void { this.onAgentDone = handler; }
   onRelayError(handler: (error: { code: string; message: string }) => void): void { this.onError = handler; }
+  onChatMessageReceived(handler: (msg: ChatMessage) => void): void { this.onChatMsg = handler; }
+
+  fetchChatHistory(limit: number = 15): Promise<ChatMessage[]> {
+    return new Promise((resolve) => {
+      if (!this.socket) { resolve([]); return; }
+      const resolved = { done: false };
+      this.socket.emit('chat:history', { limit }, (response: any) => {
+        if (resolved.done) return;
+        resolved.done = true;
+        const messages: ChatMessage[] = (response?.data || []).map((m: any) => ({
+          id: m.id,
+          senderVerusId: m.sender_verus_id || m.senderVerusId,
+          content: m.content,
+          safetyScore: m.safety_score ?? m.safetyScore ?? null,
+          safetyWarning: (m.safety_score ?? m.safetyScore ?? 0) >= 0.4,
+          safetyDetail: m.safetyDetail || null,
+          createdAt: m.created_at || m.createdAt,
+        }));
+        resolve(messages);
+      });
+      setTimeout(() => {
+        if (!resolved.done) {
+          resolved.done = true;
+          resolve([]);
+        }
+      }, 5000);
+    });
+  }
 
   disconnect(): void {
     this.socket?.disconnect();
