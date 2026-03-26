@@ -19,6 +19,7 @@ import { createInterface } from 'readline';
 
 const J41_API_URL = process.env.J41_API_URL || 'https://api.autobb.app';
 const SOVGUARD_API_URL = process.env.SOVGUARD_API_URL || 'https://safechat.autobb.app';
+const ALLOWED_TOOLS = new Set(['list_directory', 'read_file', 'write_file']);
 
 export function parseArgs(argv: string[]): WorkspaceConfig {
   const program = new Command();
@@ -366,7 +367,16 @@ export async function run(config: WorkspaceConfig): Promise<void> {
     // ── 6. Handle MCP calls from agent ─────────────────────────
 
     relay.onMcpCallReceived(async (call: McpCall) => {
-      const toolName = call.tool;
+      const toolName = call.tool?.toLowerCase();
+      if (!toolName || !ALLOWED_TOOLS.has(toolName)) {
+        relay.sendResult({
+          id: call.id,
+          success: false,
+          error: `Unknown tool: ${call.tool}`,
+          metadata: { operation: call.tool, blocked: true },
+        });
+        return;
+      }
       const relPath = call.params?.path || '.';
 
       // I5 fix: enforce --write permission
