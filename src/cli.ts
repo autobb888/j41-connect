@@ -14,6 +14,7 @@ import { DockerManager, getMcpServerPath } from './docker.js';
 import { RelayClient } from './relay-client.js';
 import { Supervisor } from './supervisor.js';
 import { Feed } from './feed.js';
+import { printChatHistory, printChatLine } from './chat.js';
 
 import { createInterface } from 'readline';
 
@@ -524,22 +525,73 @@ export async function run(config: WorkspaceConfig): Promise<void> {
         }
       });
     } else {
-      // Standard mode — simple command reader
+      // Standard mode — command reader with chat support
       const { createInterface: createRL } = await import('readline');
       stdModeRl = createRL({ input: process.stdin, terminal: false });
-      stdModeRl.on('line', (line: string) => {
-        const cmd = line.trim().toLowerCase();
-        switch (cmd) {
-          case 'pause': relay.sendPause(); feed.logStatus('Pausing...'); break;
-          case 'resume': relay.sendResume(); feed.logStatus('Resuming...'); break;
-          case 'accept': relay.sendAccept(); feed.logStatus('Accepting...'); break;
-          case 'abort': relay.sendAbort(); feed.logStatus('Aborting...'); break;
+      stdModeRl.on('line', (raw: string) => {
+        const line = raw.trim();
+        if (!line) return;
+
+        const lower = line.toLowerCase();
+        if (lower === 'abort' || lower === '/abort') {
+          relay.sendAbort(); feed.logStatus('Aborting...'); return;
         }
+
+        if (line.startsWith('/')) {
+          const cmd = line.slice(1).toLowerCase().trim();
+          switch (cmd) {
+            case 'pause': relay.sendPause(); feed.logStatus('Pausing...'); break;
+            case 'resume': relay.sendResume(); feed.logStatus('Resuming...'); break;
+            case 'accept': relay.sendAccept(); feed.logStatus('Accepting...'); break;
+            default: console.log(chalk.dim(`Unknown command: ${line}. Available: /accept /abort /pause /resume`));
+          }
+          return;
+        }
+
+        // Default: chat message
+        relay.sendChatMessage(line);
+        printChatLine({
+          id: '',
+          senderVerusId: '__self__',
+          content: line,
+          safetyScore: null,
+          safetyWarning: false,
+          createdAt: new Date().toISOString(),
+        }, relay.agentMeta.agentVerusId, relay.agentMeta);
       });
     }
 
+    // ── 8. Wire chat ────────────────────────────────────────────
+
+    // Fetch and display chat history
+    const history = await relay.fetchChatHistory(15);
+    printChatHistory(history, relay.agentMeta.agentVerusId, relay.agentMeta);
+
+    // Register incoming chat message handler
+    relay.onChatMessageReceived((msg) => {
+      // Only print agent messages (our own messages are echoed locally)
+      if (relay.agentMeta.agentVerusId && msg.senderVerusId !== relay.agentMeta.agentVerusId) return;
+      printChatLine(msg, relay.agentMeta.agentVerusId, relay.agentMeta);
+    });
+
+    // Wire supervisor chat handler (supervised mode)
+    if (supervisor) {
+      supervisor.onChat((text) => {
+        relay.sendChatMessage(text);
+        printChatLine({
+          id: '',
+          senderVerusId: '__self__',
+          content: text,
+          safetyScore: null,
+          safetyWarning: false,
+          createdAt: new Date().toISOString(),
+        }, relay.agentMeta.agentVerusId, relay.agentMeta);
+      });
+    }
+
+    feed.logChatReady();
     feed.logStatus('Waiting for agent to connect...');
-    feed.logStatus('Commands: pause | resume | accept | abort');
+    feed.logStatus('Commands: /accept /abort /pause /resume');
 
     // Keep the process alive
     await new Promise(() => {}); // Never resolves — exits via signal/status handlers

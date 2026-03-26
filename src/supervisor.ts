@@ -17,6 +17,7 @@ export class Supervisor {
   private state: InputState = 'IDLE';
   private pendingResolve: ((approved: boolean) => void) | null = null;
   private commandHandler: ((cmd: string) => void) | null = null;
+  private chatHandler: ((msg: string) => void) | null = null;
   private rl: Interface;
 
   constructor() {
@@ -30,42 +31,54 @@ export class Supervisor {
       output: process.stdout,
     });
 
-    this.rl.on('line', (line) => {
-      const input = line.trim().toLowerCase();
+    this.rl.on('line', (raw: string) => {
+      const line = raw.trim();
+      if (!line) return;
 
-      // abort and Ctrl+C work in ANY state
-      if (input === 'abort') {
+      // abort works with or without / prefix, in any state (backward compat)
+      const lower = line.toLowerCase();
+      if (lower === 'abort' || lower === '/abort') {
         this.commandHandler?.('abort');
         return;
       }
 
-      if (this.state === 'APPROVAL_PENDING' && this.pendingResolve) {
-        if (input === 'y' || input === 'yes') {
-          const resolve = this.pendingResolve;
-          this.pendingResolve = null;
+      // Approval mode: Y/N only
+      if (this.state === 'APPROVAL_PENDING') {
+        if (lower === 'y' || lower === 'yes') {
+          this.pendingResolve?.(true);
           this.state = 'IDLE';
-          resolve(true);
-        } else if (input === 'n' || input === 'no') {
-          const resolve = this.pendingResolve;
-          this.pendingResolve = null;
-          this.state = 'IDLE';
-          resolve(false);
+          return;
         }
-        // Ignore other input during approval
+        if (lower === 'n' || lower === 'no') {
+          this.pendingResolve?.(false);
+          this.state = 'IDLE';
+          return;
+        }
         return;
       }
 
-      // IDLE state — handle commands
-      if (this.state === 'IDLE' && this.commandHandler) {
-        if (['pause', 'resume', 'accept'].includes(input)) {
-          this.commandHandler(input);
+      // Command: starts with /
+      if (line.startsWith('/')) {
+        const cmd = line.slice(1).toLowerCase().trim();
+        if (['pause', 'resume', 'accept'].includes(cmd)) {
+          this.commandHandler?.(cmd);
+        } else {
+          console.log(chalk.dim(`Unknown command: ${line}. Available: /accept /abort /pause /resume`));
         }
+        return;
       }
+
+      // Default: chat message
+      this.chatHandler?.(line);
     });
   }
 
   onCommand(handler: (cmd: string) => void): void {
     this.commandHandler = handler;
+  }
+
+  onChat(handler: (msg: string) => void): void {
+    this.chatHandler = handler;
   }
 
   async promptWriteApproval(

@@ -59,6 +59,10 @@ export class Feed {
     console.log(`${this.timestamp()}  ${chalk.red('ERROR')}  ${message}`);
   }
 
+  logChatReady(): void {
+    console.log(chalk.dim('Chat enabled. Type to message agent. Commands: /accept /abort /pause /resume'));
+  }
+
   printSummary(): void {
     const duration = Math.floor((Date.now() - this.stats.startedAt) / 1000);
     const minutes = Math.floor(duration / 60);
