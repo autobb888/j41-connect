@@ -8,7 +8,7 @@
  * The /workspace directory is the mounted project directory.
  */
 
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, readdirSync, statSync, lstatSync, existsSync, mkdirSync } from 'fs';
 import { join, resolve, relative, dirname } from 'path';
 import { createHash } from 'crypto';
 import { createInterface } from 'readline';
@@ -218,15 +218,27 @@ function writeFile(relPath: string, content: string) {
 
 // ── Helpers ─────────────────────────────────────────────────────
 
-function resolveSafe(relPath: string): string | null {
-  // Reject paths with .. before resolution
+function resolveSafe(userPath: string): string | null {
+  const relPath = userPath.replace(/^\/+/, '');
   if (relPath.includes('..')) return null;
 
   const absPath = resolve(WORKSPACE_ROOT, relPath);
-  // Must be within workspace root
-  if (!absPath.startsWith(WORKSPACE_ROOT + '/') && absPath !== WORKSPACE_ROOT) {
-    return null;
+  if (!absPath.startsWith(WORKSPACE_ROOT + '/') && absPath !== WORKSPACE_ROOT) return null;
+
+  // Check each path component for symlinks
+  const parts = relPath.split('/');
+  let current = WORKSPACE_ROOT;
+  for (const part of parts) {
+    current = resolve(current, part);
+    try {
+      const stat = lstatSync(current);
+      if (stat.isSymbolicLink()) return null; // Reject symlinks
+    } catch {
+      // Path doesn't exist yet (write case) — that's OK
+      break;
+    }
   }
+
   return absPath;
 }
 
