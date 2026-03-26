@@ -48,6 +48,7 @@ export class DockerManager {
 
     this.container = await this.docker.createContainer({
       Image: MCP_IMAGE,
+      User: '1000:1000',
       name: containerName,
       Cmd: ['node', '/app/mcp-server.js'],
       WorkingDir: WORKSPACE_MOUNT,
