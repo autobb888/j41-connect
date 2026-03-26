@@ -42,6 +42,14 @@ export async function preScan(projectDir: string, sovguard?: SovGuardConfig): Pr
   directoryHash: string;
   confirmed: boolean;
 }> {
+  if (!process.stdin.isTTY) {
+    console.error(
+      'Error: pre-scan requires an interactive terminal.\n' +
+      'Use --skip-scan to bypass (not recommended) or run in a TTY.'
+    );
+    process.exit(1);
+  }
+
   console.log(chalk.cyan('\nPre-scanning directory...\n'));
 
   const exclusions: ExclusionEntry[] = [];
