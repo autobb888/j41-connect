@@ -123,11 +123,15 @@ function readSecret(prompt: string): Promise<string> {
     let key = '';
     const onData = (char: string) => {
       if (char === '\r' || char === '\n') {
-        stdin.setRawMode(wasRaw ?? false);
-        stdin.pause();
         stdin.removeListener('data', onData);
-        process.stdout.write('\n');
-        resolve(key);
+        stdin.setRawMode(wasRaw ?? false);
+        stdin.setEncoding('utf-8'); // reset to consistent state
+        stdin.pause();
+        // Allow event loop to settle before other readers take stdin
+        setImmediate(() => {
+          process.stdout.write('\n');
+          resolve(key);
+        });
       } else if (char === '\u0003') { // Ctrl+C
         stdin.setRawMode(wasRaw ?? false);
         process.stdout.write('\n');

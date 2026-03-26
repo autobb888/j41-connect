@@ -20,10 +20,14 @@ export class Supervisor {
   private rl: Interface;
 
   constructor() {
+    // Ensure stdin is in a clean state for readline
+    if (process.stdin.isPaused()) {
+      process.stdin.resume();
+    }
+
     this.rl = createInterface({
       input: process.stdin,
       output: process.stdout,
-      terminal: false,
     });
 
     this.rl.on('line', (line) => {
