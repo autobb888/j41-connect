@@ -238,3 +238,6 @@ function isBinary(buffer: Buffer): boolean {
   }
   return false;
 }
+
+// Exports for testing (not used at runtime)
+export { resolveSafe, listDirectory, readFile, writeFile, isBinary, WORKSPACE_ROOT, MAX_FILE_SIZE, MAX_DIR_ENTRIES };
