@@ -39,11 +39,47 @@ const SCAN_MAX_BYTES = 100 * 1024; // 100KB
 const REPORT_FILE = join(process.env.HOME || '~', '.j41', 'sovguard-reports.jsonl');
 const REPORT_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 
+// Simple token bucket rate limiter
+class RateLimiter {
+  private tokens: number;
+  private lastRefill: number;
+  private readonly maxTokens: number;
+  private readonly refillRate: number; // tokens per ms
+
+  constructor(maxPerSecond: number, burst: number) {
+    this.maxTokens = burst;
+    this.tokens = burst;
+    this.refillRate = maxPerSecond / 1000;
+    this.lastRefill = Date.now();
+  }
+
+  async acquire(): Promise<void> {
+    this.refill();
+    if (this.tokens >= 1) {
+      this.tokens--;
+      return;
+    }
+    // Wait until a token is available
+    const waitMs = Math.ceil((1 - this.tokens) / this.refillRate);
+    await new Promise((r) => setTimeout(r, waitMs));
+    this.refill();
+    this.tokens--;
+  }
+
+  private refill(): void {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    this.tokens = Math.min(this.maxTokens, this.tokens + elapsed * this.refillRate);
+    this.lastRefill = now;
+  }
+}
+
 export class SovGuardClient {
   private config: SovGuardConfig;
   private _consecutiveFailures = 0;
   private _disabled = false;
   private _encryptionKey: Buffer | null = null;
+  private rateLimiter = new RateLimiter(10, 20); // 10 req/s, burst 20
 
   constructor(config: SovGuardConfig) {
     this.config = config;
@@ -96,6 +132,8 @@ export class SovGuardClient {
     if (content.length > SCAN_MAX_BYTES) {
       return null; // Caller handles oversized content
     }
+
+    await this.rateLimiter.acquire();
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
