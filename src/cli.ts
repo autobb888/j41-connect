@@ -277,7 +277,11 @@ export async function run(config: WorkspaceConfig): Promise<void> {
       sovguardClient = new SovGuardClient(config.sovguard);
       const encLabel = sovguardClient.encrypted ? ' (E2E encrypted)' : '';
       feed.logStatus(`SovGuard file scanning enabled${encLabel} (${config.sovguard.apiUrl})`);
-      sovguardClient.purgeOldReports();
+      // Flush queued false positive reports from previous sessions
+      const flushResult = await sovguardClient.flushReports();
+      if (flushResult.sent > 0) {
+        feed.logStatus(`Sent ${flushResult.sent} queued SovGuard report(s)`);
+      }
     } else {
       feed.logSovguardDisabledWarning();
     }

@@ -18,6 +18,8 @@ export interface SovGuardScanResult {
   score: number;
   reason?: string;
   category?: string;
+  classification?: string;
+  flags?: string[];
 }
 
 export interface SovGuardReport {
@@ -233,11 +235,52 @@ export class SovGuardClient {
     }
   }
 
-  /** Stub — sends queued reports to POST /v1/report when endpoint exists */
-  async flushReports(): Promise<void> {
-    // TODO: implement when SovGuard builds POST /v1/report
-    // For now, just purge old reports
+  /** Send queued false positive reports to POST /v1/report, then purge old entries */
+  async flushReports(): Promise<{ sent: number; failed: number }> {
     this.purgeOldReports();
+
+    if (!existsSync(REPORT_FILE)) return { sent: 0, failed: 0 };
+
+    let sent = 0;
+    let failed = 0;
+    const remaining: string[] = [];
+
+    try {
+      const raw = readFileSync(REPORT_FILE, 'utf-8');
+      const lines = raw.trim().split('\n').filter(Boolean);
+
+      for (const line of lines) {
+        try {
+          const report = JSON.parse(line);
+
+          const response = await fetch(`${this.config.apiUrl}/v1/report`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-API-Key': this.config.apiKey,
+            },
+            body: JSON.stringify(report),
+          });
+
+          if (response.ok) {
+            sent++;
+          } else {
+            failed++;
+            remaining.push(line); // Keep for retry
+          }
+        } catch {
+          failed++;
+          remaining.push(line);
+        }
+      }
+
+      // Rewrite file with only unsent reports
+      writeFileSync(REPORT_FILE, remaining.join('\n') + (remaining.length ? '\n' : ''), { mode: 0o600 });
+    } catch {
+      // File read error — skip flush
+    }
+
+    return { sent, failed };
   }
 }
 
