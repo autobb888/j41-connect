@@ -13,6 +13,8 @@ import chalk from 'chalk';
 
 const CONTAINER_NAME_PREFIX = 'j41-connect-';
 const MCP_IMAGE = 'node:18-alpine';
+// Pinned digest — update periodically with: docker pull node:18-alpine && docker inspect --format='{{index .RepoDigests 0}}' node:18-alpine
+const MCP_IMAGE_DIGEST = 'node@sha256:8d6421d663b4c28fd3ebc498332f249011d118945588d0a35cb9bc4b8ca09d9e';
 const WORKSPACE_MOUNT = '/workspace';
 
 export class DockerManager {
@@ -28,26 +30,54 @@ export class DockerManager {
     stdin: Writable;
     stdout: Readable;
   }> {
-    // Pull image if needed
+    // Pull image if needed — prefer pinned digest for integrity
+    let useImage = MCP_IMAGE;
     try {
-      await this.docker.getImage(MCP_IMAGE).inspect();
+      // Check if pinned digest is available locally
+      await this.docker.getImage(MCP_IMAGE_DIGEST).inspect();
+      useImage = MCP_IMAGE_DIGEST;
     } catch {
-      console.log(chalk.gray(`Pulling ${MCP_IMAGE}...`));
-      await new Promise<void>((resolve, reject) => {
-        this.docker.pull(MCP_IMAGE, (err: any, stream: any) => {
-          if (err) return reject(err);
-          this.docker.modem.followProgress(stream, (err2: any) => {
-            if (err2) reject(err2);
-            else resolve();
+      // Try the tag
+      try {
+        const info = await this.docker.getImage(MCP_IMAGE).inspect();
+        // Verify the tag resolves to our pinned digest
+        const digests: string[] = info.RepoDigests || [];
+        if (digests.some((d: string) => d === MCP_IMAGE_DIGEST)) {
+          useImage = MCP_IMAGE;
+        } else {
+          console.warn(chalk.yellow(`⚠ Local ${MCP_IMAGE} digest does not match pinned digest. Re-pulling...`));
+          throw new Error('digest mismatch');
+        }
+      } catch {
+        console.log(chalk.gray(`Pulling ${MCP_IMAGE_DIGEST}...`));
+        await new Promise<void>((resolve, reject) => {
+          this.docker.pull(MCP_IMAGE_DIGEST, (err: any, stream: any) => {
+            if (err) {
+              // Fallback to tag if digest pull fails (e.g., older Docker versions)
+              console.log(chalk.gray(`Digest pull failed, falling back to ${MCP_IMAGE}...`));
+              this.docker.pull(MCP_IMAGE, (err2: any, stream2: any) => {
+                if (err2) return reject(err2);
+                this.docker.modem.followProgress(stream2, (err3: any) => {
+                  if (err3) reject(err3);
+                  else resolve();
+                });
+              });
+              return;
+            }
+            this.docker.modem.followProgress(stream, (err2: any) => {
+              if (err2) reject(err2);
+              else resolve();
+            });
           });
         });
-      });
+        useImage = MCP_IMAGE_DIGEST;
+      }
     }
 
     const containerName = CONTAINER_NAME_PREFIX + Date.now();
 
     this.container = await this.docker.createContainer({
-      Image: MCP_IMAGE,
+      Image: useImage,
       name: containerName,
       Cmd: ['node', '/app/mcp-server.js'],
       WorkingDir: WORKSPACE_MOUNT,
