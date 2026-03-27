@@ -4,12 +4,13 @@
 
 import { writeFileSync, readFileSync, existsSync, mkdirSync, chmodSync } from 'fs';
 import { join, dirname } from 'path';
-import { createHash } from 'crypto';
+import { createHash, randomBytes, createCipheriv, createDecipheriv } from 'crypto';
 import chalk from 'chalk';
 
 export interface SovGuardConfig {
   apiKey: string;
   apiUrl: string;
+  encryptionKey?: string; // base64-encoded 256-bit AES key
 }
 
 export interface SovGuardScanResult {
@@ -42,14 +43,52 @@ export class SovGuardClient {
   private config: SovGuardConfig;
   private _consecutiveFailures = 0;
   private _disabled = false;
+  private _encryptionKey: Buffer | null = null;
 
   constructor(config: SovGuardConfig) {
     this.config = config;
+
+    if (config.encryptionKey) {
+      const decoded = Buffer.from(config.encryptionKey, 'base64');
+      if (decoded.length === 32) {
+        this._encryptionKey = decoded;
+      } else {
+        console.warn(chalk.yellow(`⚠ Encryption key must be 32 bytes (256 bits). Got ${decoded.length} bytes. Encryption disabled.`));
+      }
+    }
   }
+
+  get encrypted(): boolean { return this._encryptionKey !== null; }
 
   get consecutiveFailures(): number { return this._consecutiveFailures; }
   isDisabled(): boolean { return this._disabled; }
   disable(): void { this._disabled = true; }
+
+  private encryptPayload(jsonBody: string): { iv: string; tag: string; data: string } {
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', this._encryptionKey!, iv);
+    const encrypted = Buffer.concat([cipher.update(jsonBody, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return {
+      iv: iv.toString('base64'),
+      tag: tag.toString('base64'),
+      data: encrypted.toString('base64'),
+    };
+  }
+
+  private decryptPayload(envelope: { iv: string; tag: string; data: string }): string {
+    const decipher = createDecipheriv(
+      'aes-256-gcm',
+      this._encryptionKey!,
+      Buffer.from(envelope.iv, 'base64'),
+    );
+    decipher.setAuthTag(Buffer.from(envelope.tag, 'base64'));
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(envelope.data, 'base64')),
+      decipher.final(),
+    ]);
+    return decrypted.toString('utf8');
+  }
 
   async scanContent(content: Buffer, mimeType: string): Promise<SovGuardScanResult | null> {
     if (this._disabled) return null;
@@ -62,16 +101,28 @@ export class SovGuardClient {
     const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
 
     try {
+      const jsonBody = JSON.stringify({
+        content: content.toString('base64'),
+        mimeType,
+      });
+
+      const headers: Record<string, string> = {
+        'X-API-Key': this.config.apiKey,
+        'Content-Type': 'application/json',
+      };
+      let body: string;
+
+      if (this._encryptionKey) {
+        headers['X-Encrypted'] = 'true';
+        body = JSON.stringify(this.encryptPayload(jsonBody));
+      } else {
+        body = jsonBody;
+      }
+
       const response = await fetch(`${this.config.apiUrl}/v1/scan/file/content`, {
         method: 'POST',
-        headers: {
-          'X-API-Key': this.config.apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          content: content.toString('base64'),
-          mimeType,
-        }),
+        headers,
+        body,
         signal: controller.signal,
       });
 
@@ -84,11 +135,18 @@ export class SovGuardClient {
       }
 
       this._consecutiveFailures = 0;
+
+      if (this._encryptionKey && response.headers.get('x-encrypted') === 'true') {
+        const envelope = await response.json() as { iv: string; tag: string; data: string };
+        const decrypted = this.decryptPayload(envelope);
+        return JSON.parse(decrypted) as SovGuardScanResult;
+      }
+
       return await response.json() as SovGuardScanResult;
     } catch (err) {
       if (err instanceof SovGuardAuthError) throw err;
       this._consecutiveFailures++;
-      return null; // Timeout or network error
+      return null;
     } finally {
       clearTimeout(timer);
     }
