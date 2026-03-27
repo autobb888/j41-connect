@@ -387,6 +387,21 @@ export async function run(config: WorkspaceConfig): Promise<void> {
         case 'agent_disconnected':
           feed.logStatus('Agent disconnected. Workspace remains open.');
           break;
+        case 'disconnected':
+          if (data?.reconnecting) {
+            feed.logStatus('Connection lost — reconnecting...');
+          } else {
+            feed.logError('Disconnected by server');
+            cleanup().then(() => process.exit(1));
+          }
+          break;
+        case 'reconnected':
+          feed.logStatus('Reconnected to relay');
+          break;
+        case 'reconnect_failed':
+          feed.logError('Failed to reconnect after 5 attempts');
+          cleanup().then(() => process.exit(1));
+          break;
         default:
           feed.logStatus(`Status: ${status}`);
       }

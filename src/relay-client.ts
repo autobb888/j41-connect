@@ -9,8 +9,11 @@ import { io, Socket } from 'socket.io-client';
 import chalk from 'chalk';
 import type { McpCall, McpResult, ExclusionEntry } from './types.js';
 
+const KEEPALIVE_INTERVAL_MS = 30_000; // 30 seconds
+
 export class RelayClient {
   private socket: Socket | null = null;
+  private keepaliveTimer: ReturnType<typeof setInterval> | null = null;
   private onMcpCall: ((call: McpCall) => void) | null = null;
   private onStatusChanged: ((status: string, data?: any) => void) | null = null;
   private onAgentDone: (() => void) | null = null;
@@ -29,6 +32,7 @@ export class RelayClient {
       });
 
       this.socket.on('connect', () => {
+        this.startKeepalive();
         resolve();
       });
 
@@ -62,10 +66,22 @@ export class RelayClient {
       });
 
       this.socket.on('disconnect', (reason) => {
+        this.stopKeepalive();
         if (reason === 'io server disconnect') {
-          // Server disconnected us — don't auto-reconnect
           this.onStatusChanged?.('disconnected', { reason: 'server' });
+        } else {
+          // Transport disconnect — Socket.IO will auto-reconnect
+          this.onStatusChanged?.('disconnected', { reason: 'transport', reconnecting: true });
         }
+      });
+
+      this.socket.on('reconnect', () => {
+        this.startKeepalive();
+        this.onStatusChanged?.('reconnected', {});
+      });
+
+      this.socket.on('reconnect_failed', () => {
+        this.onStatusChanged?.('reconnect_failed', {});
       });
     });
   }
@@ -93,8 +109,23 @@ export class RelayClient {
   onRelayError(handler: (error: { code: string; message: string }) => void): void { this.onError = handler; }
 
   disconnect(): void {
+    this.stopKeepalive();
     this.socket?.disconnect();
     this.socket = null;
+  }
+
+  private startKeepalive(): void {
+    this.stopKeepalive();
+    this.keepaliveTimer = setInterval(() => {
+      this.socket?.emit('workspace:ping');
+    }, KEEPALIVE_INTERVAL_MS);
+  }
+
+  private stopKeepalive(): void {
+    if (this.keepaliveTimer) {
+      clearInterval(this.keepaliveTimer);
+      this.keepaliveTimer = null;
+    }
   }
 
   isConnected(): boolean {
