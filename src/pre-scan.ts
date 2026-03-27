@@ -48,19 +48,25 @@ export async function preScan(projectDir: string, sovguard?: SovGuardConfig): Pr
   if (sovguard) {
     const client = new SovGuardClient(sovguard);
     let scanned = 0;
-    for (const filePath of allFiles) {
+    const scannable = allFiles.filter((f) => {
+      const ext = extname(f).toLowerCase();
+      return SCANNABLE_EXTENSIONS.has(ext) && statSync(f).size <= SCAN_MAX_BYTES;
+    });
+    const total = scannable.length;
+
+    for (const filePath of scannable) {
       try {
         const relPath = relative(projectDir, filePath);
         const ext = extname(filePath).toLowerCase();
-        if (!SCANNABLE_EXTENSIONS.has(ext)) continue;
-
-        const stat = statSync(filePath);
-        if (stat.size > SCAN_MAX_BYTES) continue;
-
         const content = readFileSync(filePath);
         const mimeType = MIME_MAP[ext] || 'text/plain';
         const result = await client.scanContent(content, mimeType);
         scanned++;
+
+        // Progress indicator (overwrite line)
+        if (process.stdout.isTTY) {
+          process.stdout.write(`\r  Scanning ${scanned}/${total} files...`);
+        }
 
         if (result && !result.safe) {
           const reason = result.reason || result.category || `SovGuard flagged as unsafe (score: ${result.score.toFixed(2)})`;
@@ -68,13 +74,16 @@ export async function preScan(projectDir: string, sovguard?: SovGuardConfig): Pr
         }
       } catch (err) {
         if (err instanceof SovGuardAuthError) {
+          if (process.stdout.isTTY) process.stdout.write('\r' + ' '.repeat(40) + '\r');
           console.warn(chalk.yellow('  SovGuard: invalid API key — skipping scan'));
           break;
         }
+        scanned++;
         // Can't read/scan file — skip
       }
     }
     if (scanned > 0) {
+      if (process.stdout.isTTY) process.stdout.write('\r' + ' '.repeat(40) + '\r');
       console.log(chalk.gray(`  Scanned ${scanned} files via SovGuard cloud\n`));
     }
   }
