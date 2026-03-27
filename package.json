@@ -11,9 +11,14 @@
   "scripts": {
     "build": "tsc && tsc -p tsconfig.mcp.json && chmod +x dist/index.js",
     "dev": "tsc --watch",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
-  "files": ["dist", "LICENSE"],
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
   "dependencies": {
     "chalk": "^5.3.0",
     "commander": "^12.0.0",
@@ -25,8 +30,11 @@
     "@types/diff": "^6.0.0",
     "@types/dockerode": "^3.3.0",
     "@types/node": "^20.0.0",
-    "typescript": "^5.4.0"
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.2"
   },
-  "engines": { "node": ">=18.0.0" },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "license": "MIT"
 }
