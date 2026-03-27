@@ -37,19 +37,26 @@ export class Supervisor {
 
       // abort and Ctrl+C work in ANY state
       if (input === 'abort') {
+        let hadPending = false;
         if (this.pendingSovguardResolve) {
           const resolve = this.pendingSovguardResolve;
           this.pendingSovguardResolve = null;
           this.state = 'IDLE';
           resolve('reject');
+          hadPending = true;
         }
         if (this.pendingResolve) {
           const resolve = this.pendingResolve;
           this.pendingResolve = null;
           this.state = 'IDLE';
           resolve(false);
+          hadPending = true;
         }
-        this.commandHandler?.('abort');
+        // Only send abort command if no pending promise was resolved
+        // (resolved promises will handle their own cleanup flow)
+        if (!hadPending) {
+          this.commandHandler?.('abort');
+        }
         return;
       }
 
@@ -64,26 +71,25 @@ export class Supervisor {
           this.pendingResolve = null;
           this.state = 'IDLE';
           resolve(false);
-        }
-        if (this.fallbackHandler) {
+        } else if (this.fallbackHandler) {
+          // Only forward unrecognized input to fallback (not y/n)
           this.fallbackHandler(input);
         }
-        // Ignore other input during approval
         return;
       }
 
       if (this.state === 'SOVGUARD_PENDING' && this.pendingSovguardResolve) {
-        if (input === 'y' || input === 'yes') {
+        if (input === 'y' || input === 'yes' || input === 'retry') {
           const resolve = this.pendingSovguardResolve;
           this.pendingSovguardResolve = null;
           this.state = 'IDLE';
           resolve('approve');
-        } else if (input === 'n' || input === 'no') {
+        } else if (input === 'n' || input === 'no' || input === 'a' || input === 'abort') {
           const resolve = this.pendingSovguardResolve;
           this.pendingSovguardResolve = null;
           this.state = 'IDLE';
           resolve('reject');
-        } else if (input === 'r' || input === 'report') {
+        } else if (input === 'r' || input === 'report' || input === 'd' || input === 'disable') {
           const resolve = this.pendingSovguardResolve;
           this.pendingSovguardResolve = null;
           this.state = 'IDLE';
@@ -171,8 +177,7 @@ export class Supervisor {
   async promptSovguardFailure(failures: number): Promise<'approve' | 'reject' | 'report'> {
     console.log('');
     console.log(chalk.red(`SovGuard API appears down (${failures} consecutive failures).`));
-    console.log(chalk.cyan('  [R]etry / [D]isable scanning for this session / [A]bort session'));
-    console.log(chalk.gray('  (R=Y, D=R, A=N)'));
+    console.log(chalk.cyan('  [R]etry / [D]isable scanning / [A]bort session'));
 
     this.state = 'SOVGUARD_PENDING';
     return new Promise<'approve' | 'reject' | 'report'>((resolve) => {

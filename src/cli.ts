@@ -200,8 +200,8 @@ export async function run(config: WorkspaceConfig): Promise<void> {
   const supervisor = config.mode === 'supervised' ? new Supervisor() : null;
   let exclusions: ExclusionEntry[] = [];
   let sessionTransferBytes = 0;
-    const sovguardClient = config.sovguard ? new SovGuardClient(config.sovguard) : null;
-    let lastFlaggedWrite: { filePath: string; contentHash: string; score: number; mimeType: string } | null = null;
+  let sovguardClient: SovGuardClient | null = null;
+  let lastFlaggedWrite: { filePath: string; contentHash: string; score: number; mimeType: string } | null = null;
 
     function handleReportCommand() {
       if (!lastFlaggedWrite) {
@@ -270,11 +270,12 @@ export async function run(config: WorkspaceConfig): Promise<void> {
       config.sovguard = await promptSovguardConfig();
     }
     if (config.sovguard) {
+      sovguardClient = new SovGuardClient(config.sovguard);
       feed.logStatus(`SovGuard file scanning enabled (${config.sovguard.apiUrl})`);
+      sovguardClient.purgeOldReports();
     } else {
       feed.logSovguardDisabledWarning();
     }
-    sovguardClient?.purgeOldReports();
 
     // ── 2. Pre-scan ────────────────────────────────────────────
     const scanResult = await preScan(config.projectDir, config.sovguard);
