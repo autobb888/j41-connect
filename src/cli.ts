@@ -203,6 +203,28 @@ export async function run(config: WorkspaceConfig): Promise<void> {
     const sovguardClient = config.sovguard ? new SovGuardClient(config.sovguard) : null;
     let lastFlaggedWrite: { filePath: string; contentHash: string; score: number; mimeType: string } | null = null;
 
+    function handleReportCommand() {
+      if (!lastFlaggedWrite) {
+        console.log(chalk.gray('No SovGuard-flagged writes to report.'));
+        return;
+      }
+      if (!sovguardClient) {
+        console.log(chalk.gray('SovGuard is not active.'));
+        return;
+      }
+      sovguardClient.queueReport({
+        file_path: lastFlaggedWrite.filePath,
+        content_hash: lastFlaggedWrite.contentHash,
+        score: lastFlaggedWrite.score,
+        mime_type: lastFlaggedWrite.mimeType,
+        workspace_uid: config.uid,
+        timestamp: new Date().toISOString(),
+        verdict: 'false_positive',
+      });
+      feed.logStatus(`False positive report queued for ${lastFlaggedWrite.filePath}`);
+      lastFlaggedWrite = null;
+    }
+
   // ── Cleanup function (used by signals + normal exit) ─────────
   let cleanedUp = false;
   let stdModeRl: any = null; // readline for standard mode cleanup
@@ -659,6 +681,11 @@ export async function run(config: WorkspaceConfig): Promise<void> {
           case 'abort': relay.sendAbort(); feed.logStatus('Aborting...'); break;
         }
       });
+      supervisor.onFallbackCommand((cmd) => {
+        if (cmd === 'report') {
+          handleReportCommand();
+        }
+      });
     } else {
       // Standard mode — simple command reader
       const { createInterface: createRL } = await import('readline');
@@ -670,6 +697,9 @@ export async function run(config: WorkspaceConfig): Promise<void> {
           case 'resume': relay.sendResume(); feed.logStatus('Resuming...'); break;
           case 'accept': relay.sendAccept(); feed.logStatus('Accepting...'); break;
           case 'abort': relay.sendAbort(); feed.logStatus('Aborting...'); break;
+        }
+        if (cmd === 'report') {
+          handleReportCommand();
         }
       });
     }
