@@ -14,6 +14,8 @@ import { DockerManager, getMcpServerPath } from './docker.js';
 import { RelayClient } from './relay-client.js';
 import { Supervisor } from './supervisor.js';
 import { Feed } from './feed.js';
+import { SovGuardClient, SCAN_MAX_BYTES } from './sovguard.js';
+import type { SovGuardScanResult, SovGuardReport } from './sovguard.js';
 
 import { createInterface } from 'readline';
 
@@ -198,6 +200,8 @@ export async function run(config: WorkspaceConfig): Promise<void> {
   const supervisor = config.mode === 'supervised' ? new Supervisor() : null;
   let exclusions: ExclusionEntry[] = [];
   let sessionTransferBytes = 0;
+    const sovguardClient = config.sovguard ? new SovGuardClient(config.sovguard) : null;
+    let lastFlaggedWrite: { filePath: string; contentHash: string; score: number; mimeType: string } | null = null;
 
   // ── Cleanup function (used by signals + normal exit) ─────────
   let cleanedUp = false;
@@ -246,8 +250,9 @@ export async function run(config: WorkspaceConfig): Promise<void> {
     if (config.sovguard) {
       feed.logStatus(`SovGuard file scanning enabled (${config.sovguard.apiUrl})`);
     } else {
-      console.warn(chalk.yellow('Warning: SovGuard API key not set — file scanning disabled (pattern-only mode)'));
+      feed.logSovguardDisabledWarning();
     }
+    sovguardClient?.purgeOldReports();
 
     // ── 2. Pre-scan ────────────────────────────────────────────
     const scanResult = await preScan(config.projectDir, config.sovguard);
@@ -453,6 +458,132 @@ export async function run(config: WorkspaceConfig): Promise<void> {
         }
       }
 
+      let runtimeSovguardScore = 0;
+
+      // SovGuard real-time write scanning
+      if (toolName === 'write_file' && sovguardClient && !sovguardClient.isDisabled()) {
+        const writeContent = Buffer.from(call.params.content, 'utf-8');
+
+        if (writeContent.length > SCAN_MAX_BYTES) {
+          const sizeKB = (writeContent.length / 1024).toFixed(1);
+          feed.logSovguardUnscanned(relPath, `too large for scan (${sizeKB}KB > 100KB)`);
+
+          if (supervisor) {
+            const decision = await supervisor.promptSovguardApproval(relPath, 0, `file too large for scan (${sizeKB}KB > 100KB) — allow without scanning?`);
+            if (decision === 'reject') {
+              const meta: OperationMetadata = {
+                operation: 'write_file',
+                path: relPath,
+                sizeBytes: writeContent.length,
+                sovguardScore: 0,
+                blocked: true,
+                blockReason: 'write too large for SovGuard scan — rejected by buyer',
+              };
+              feed.logOperation(meta, false);
+              relay.sendResult({ id: call.id, success: false, error: 'Write rejected — too large for scan', metadata: meta });
+              return;
+            }
+          }
+        } else {
+          const mimeType = 'text/plain';
+          const scanResult = await sovguardClient.scanContent(writeContent, mimeType);
+
+          if (scanResult === null) {
+            if (sovguardClient.consecutiveFailures >= 3) {
+              if (supervisor) {
+                const decision = await supervisor.promptSovguardFailure(sovguardClient.consecutiveFailures);
+                if (decision === 'reject') {
+                  relay.sendAbort();
+                  await cleanup();
+                  process.exit(1);
+                } else if (decision === 'report') {
+                  sovguardClient.disable();
+                  feed.logStatus('SovGuard scanning disabled for this session');
+                }
+              } else {
+                sovguardClient.disable();
+                feed.logStatus('SovGuard scanning disabled for this session (API unreachable)');
+              }
+            } else {
+              if (supervisor) {
+                const decision = await supervisor.promptSovguardApproval(relPath, 0, 'SovGuard API unreachable — allow write without scanning?');
+                if (decision === 'reject') {
+                  const meta: OperationMetadata = {
+                    operation: 'write_file',
+                    path: relPath,
+                    sovguardScore: 0,
+                    blocked: true,
+                    blockReason: 'SovGuard API unreachable — write rejected',
+                  };
+                  feed.logOperation(meta, false);
+                  relay.sendResult({ id: call.id, success: false, error: 'SovGuard API unreachable', metadata: meta });
+                  return;
+                }
+              }
+            }
+          } else if (!scanResult.safe) {
+            runtimeSovguardScore = scanResult.score;
+            feed.logSovguardBlock(relPath, scanResult.score, scanResult.reason);
+
+            lastFlaggedWrite = {
+              filePath: relPath,
+              contentHash: sovguardClient.contentHash(writeContent),
+              score: scanResult.score,
+              mimeType,
+            };
+
+            let decision: 'approve' | 'reject' | 'report' = 'reject';
+            if (supervisor) {
+              decision = await supervisor.promptSovguardApproval(relPath, scanResult.score, scanResult.reason);
+            } else {
+              const meta: OperationMetadata = {
+                operation: 'write_file',
+                path: relPath,
+                sovguardScore: scanResult.score,
+                blocked: true,
+                blockReason: `SovGuard blocked (score: ${scanResult.score.toFixed(2)})`,
+              };
+              feed.logOperation(meta, false);
+              relay.sendResult({ id: call.id, success: false, error: 'Write blocked by SovGuard', metadata: meta });
+              return;
+            }
+
+            if (decision === 'reject') {
+              const meta: OperationMetadata = {
+                operation: 'write_file',
+                path: relPath,
+                sovguardScore: scanResult.score,
+                blocked: true,
+                blockReason: 'blocked by SovGuard — rejected by buyer',
+              };
+              feed.logOperation(meta, false);
+              relay.sendResult({ id: call.id, success: false, error: 'Write blocked by SovGuard', metadata: meta });
+              return;
+            }
+
+            if (decision === 'report') {
+              sovguardClient.queueReport({
+                file_path: relPath,
+                content_hash: sovguardClient.contentHash(writeContent),
+                score: scanResult.score,
+                mime_type: mimeType,
+                workspace_uid: config.uid,
+                timestamp: new Date().toISOString(),
+                verdict: 'false_positive',
+              });
+              lastFlaggedWrite = null;
+              feed.logStatus(`False positive report queued for ${relPath}`);
+            }
+          } else {
+            runtimeSovguardScore = scanResult.score;
+          }
+        }
+      }
+
+      if (toolName === 'write_file' && sovguardClient?.isDisabled()) {
+        feed.logSovguardUnscanned(relPath, 'SovGuard disabled');
+      }
+
       // Execute via MCP server in Docker
       try {
         const result = await callMcpServer('tools/call', {
@@ -469,7 +600,7 @@ export async function run(config: WorkspaceConfig): Promise<void> {
           path: mcpMeta.path || relPath,
           sizeBytes,
           contentHash: mcpMeta.contentHash,
-          sovguardScore: 0, // v1: no real-time scanning
+          sovguardScore: runtimeSovguardScore,
           approved: toolName === 'write_file' ? true : undefined,
           blocked: !!result.isError,
           blockReason: result.isError ? result.content?.[0]?.text : undefined,
@@ -484,6 +615,21 @@ export async function run(config: WorkspaceConfig): Promise<void> {
           error: result.isError ? result.content?.[0]?.text : undefined,
           metadata: meta,
         });
+
+        // Fire-and-forget SovGuard read scan
+        if (toolName === 'read_file' && sovguardClient && !sovguardClient.isDisabled() && !result.isError) {
+          const readContent = result.content?.[0]?.text;
+          if (readContent) {
+            const buf = Buffer.from(readContent, 'utf-8');
+            if (buf.length <= SCAN_MAX_BYTES) {
+              sovguardClient.scanContent(buf, 'text/plain').then((scanResult) => {
+                if (scanResult) {
+                  feed.logSovguardReadScore(mcpMeta.path || relPath, scanResult.score);
+                }
+              }).catch(() => { /* silently skip */ });
+            }
+          }
+        }
       } catch (err: any) {
         const meta: OperationMetadata = {
           operation: toolName as any,
