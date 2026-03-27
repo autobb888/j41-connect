@@ -13,11 +13,8 @@ import { createInterface } from 'readline';
 import chalk from 'chalk';
 import { AUTO_EXCLUDE_PATTERNS } from './types.js';
 import type { ExclusionEntry } from './types.js';
-
-interface SovGuardConfig {
-  apiKey: string;
-  apiUrl: string;
-}
+import { SovGuardClient, SovGuardAuthError, SCAN_MAX_BYTES } from './sovguard.js';
+import type { SovGuardConfig } from './sovguard.js';
 
 // File extensions worth scanning via cloud API (text/structured content)
 const SCANNABLE_EXTENSIONS = new Set([
@@ -33,9 +30,6 @@ const MIME_MAP: Record<string, string> = {
   '.csv': 'text/csv', '.md': 'text/markdown',
 };
 
-// Max file size for cloud scan (100KB)
-const SCAN_MAX_BYTES = 100 * 1024;
-const SCAN_TIMEOUT_MS = 5000;
 
 export async function preScan(projectDir: string, sovguard?: SovGuardConfig): Promise<{
   exclusions: ExclusionEntry[];
@@ -50,25 +44,27 @@ export async function preScan(projectDir: string, sovguard?: SovGuardConfig): Pr
   // Walk directory (skip auto-excluded dirs)
   walkDir(projectDir, projectDir, allFiles, exclusions);
 
-  // Scan remaining files via SovGuard cloud API (L6 File Scan)
+  // Scan remaining files via SovGuard cloud API
   if (sovguard) {
+    const client = new SovGuardClient(sovguard);
     let scanned = 0;
     for (const filePath of allFiles) {
       try {
         const relPath = relative(projectDir, filePath);
         const ext = extname(filePath).toLowerCase();
-        if (!SCANNABLE_EXTENSIONS.has(ext)) continue; // only text/structured content
+        if (!SCANNABLE_EXTENSIONS.has(ext)) continue;
 
         const stat = statSync(filePath);
         if (stat.size > SCAN_MAX_BYTES) continue;
 
         const content = readFileSync(filePath);
         const mimeType = MIME_MAP[ext] || 'text/plain';
-        const result = await scanWithSovGuard(sovguard, content, mimeType);
+        const result = await client.scanContent(content, mimeType);
         scanned++;
 
         if (result && !result.safe) {
-          exclusions.push({ path: relPath, reason: `SovGuard flagged (score: ${result.score.toFixed(2)})` });
+          const reason = result.reason || result.category || `SovGuard flagged as unsafe (score: ${result.score.toFixed(2)})`;
+          exclusions.push({ path: relPath, reason });
         }
       } catch (err) {
         if (err instanceof SovGuardAuthError) {
@@ -285,46 +281,4 @@ export function isExcluded(relPath: string, exclusions: ExclusionEntry[]): boole
     const exPath = ex.path.replace(/\/$/, '');
     return relPath === exPath || relPath.startsWith(exPath + '/');
   });
-}
-
-class SovGuardAuthError extends Error {
-  constructor() { super('SovGuard: invalid API key'); }
-}
-
-async function scanWithSovGuard(
-  config: SovGuardConfig,
-  content: Buffer,
-  mimeType: string,
-): Promise<{ safe: boolean; score: number } | null> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(`${config.apiUrl}/v1/scan/file/content`, {
-      method: 'POST',
-      headers: {
-        'X-API-Key': config.apiKey,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        content: content.toString('base64'),
-        mimeType,
-      }),
-      signal: controller.signal,
-    });
-
-    if (!response.ok) {
-      if (response.status === 401) {
-        throw new SovGuardAuthError();
-      }
-      return null;
-    }
-
-    return await response.json() as { safe: boolean; score: number };
-  } catch (err) {
-    if (err instanceof SovGuardAuthError) throw err;
-    return null; // Timeout or network error — skip
-  } finally {
-    clearTimeout(timer);
-  }
 }
