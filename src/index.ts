@@ -3,10 +3,16 @@
 import { parseArgs, run } from './cli.js';
 
 async function main() {
-  // Route 'config' subcommand before commander processes <directory>
+  // Route subcommands before commander processes <directory>
   if (process.argv[2] === 'config') {
     const { handleConfigCommand } = await import('./config.js');
     await handleConfigCommand(process.argv.slice(3));
+    process.exit(0);
+  }
+
+  if (process.argv[2] === 'doctor') {
+    const { runDoctor } = await import('./doctor.js');
+    await runDoctor();
     process.exit(0);
   }
 
