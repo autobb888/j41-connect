@@ -75,6 +75,9 @@ export interface SessionStats {
   blocked: number;
   totalBytes: number;
   startedAt: number;
+  sovguardScans: number;
+  sovguardBlocks: number;
+  sovguardReports: number;
 }
 
 // Stdin state machine for command/approval coexistence

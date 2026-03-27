@@ -14,7 +14,7 @@ export class Feed {
 
   constructor(verbose: boolean) {
     this.verbose = verbose;
-    this.stats = { reads: 0, writes: 0, blocked: 0, totalBytes: 0, startedAt: Date.now() };
+    this.stats = { reads: 0, writes: 0, blocked: 0, totalBytes: 0, startedAt: Date.now(), sovguardScans: 0, sovguardBlocks: 0, sovguardReports: 0 };
   }
 
   logOperation(meta: OperationMetadata, approved?: boolean): void {
@@ -60,12 +60,19 @@ export class Feed {
   }
 
   logSovguardBlock(path: string, score: number, reason?: string): void {
+    this.stats.sovguardScans++;
+    this.stats.sovguardBlocks++;
     const reasonStr = reason ? `, reason: ${reason}` : '';
     console.log(`${this.timestamp()}  ${chalk.red('⚠ SOVGUARD')}  ${path}  ${chalk.red('BLOCKED')} (score: ${score.toFixed(2)}${reasonStr})`);
   }
 
   logSovguardReadScore(path: string, score: number): void {
+    this.stats.sovguardScans++;
     console.log(`${this.timestamp()}  ${chalk.gray('SOVGUARD')}  ${path}  score: ${score.toFixed(2)} ✓`);
+  }
+
+  incrementSovguardReports(): void {
+    this.stats.sovguardReports++;
   }
 
   logSovguardDisabledWarning(): void {
@@ -79,13 +86,31 @@ export class Feed {
 
   printSummary(): void {
     const duration = Math.floor((Date.now() - this.stats.startedAt) / 1000);
-    const minutes = Math.floor(duration / 60);
+    const hrs = Math.floor(duration / 3600);
+    const mins = Math.floor((duration % 3600) / 60);
+    const secs = duration % 60;
+    const durationStr = hrs > 0 ? `${hrs}h ${mins}m` : mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
 
     console.log('');
-    console.log(chalk.green('Session complete.'));
-    console.log(`Files read: ${this.stats.reads} | Written: ${this.stats.writes} | Blocked: ${this.stats.blocked}`);
-    console.log(`Duration: ${minutes} minutes`);
-    console.log(`Total transfer: ${this.formatSize(this.stats.totalBytes)}`);
+    console.log(chalk.cyan('─'.repeat(50)));
+    console.log(chalk.green('Session complete'));
+    console.log(chalk.cyan('─'.repeat(50)));
+    console.log(`  Files read:      ${this.stats.reads}`);
+    console.log(`  Files written:   ${this.stats.writes}`);
+    console.log(`  Blocked:         ${this.stats.blocked}`);
+    console.log(`  Duration:        ${durationStr}`);
+    console.log(`  Transfer:        ${this.formatSize(this.stats.totalBytes)}`);
+
+    if (this.stats.sovguardScans > 0) {
+      console.log('');
+      console.log(chalk.cyan('  SovGuard'));
+      console.log(`  Scans:           ${this.stats.sovguardScans}`);
+      console.log(`  Blocked:         ${this.stats.sovguardBlocks}`);
+      if (this.stats.sovguardReports > 0) {
+        console.log(`  Reports queued:  ${this.stats.sovguardReports}`);
+      }
+    }
+    console.log(chalk.cyan('─'.repeat(50)));
   }
 
   getStats(): SessionStats {
