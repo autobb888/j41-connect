@@ -16,6 +16,8 @@ import type { InputState } from './types.js';
 export class Supervisor {
   private state: InputState = 'IDLE';
   private pendingResolve: ((approved: boolean) => void) | null = null;
+  private pendingSovguardResolve: ((decision: 'approve' | 'reject' | 'report') => void) | null = null;
+  private fallbackHandler: ((cmd: string) => void) | null = null;
   private commandHandler: ((cmd: string) => void) | null = null;
   private rl: Interface;
 
@@ -35,6 +37,18 @@ export class Supervisor {
 
       // abort and Ctrl+C work in ANY state
       if (input === 'abort') {
+        if (this.pendingSovguardResolve) {
+          const resolve = this.pendingSovguardResolve;
+          this.pendingSovguardResolve = null;
+          this.state = 'IDLE';
+          resolve('reject');
+        }
+        if (this.pendingResolve) {
+          const resolve = this.pendingResolve;
+          this.pendingResolve = null;
+          this.state = 'IDLE';
+          resolve(false);
+        }
         this.commandHandler?.('abort');
         return;
       }
@@ -51,14 +65,39 @@ export class Supervisor {
           this.state = 'IDLE';
           resolve(false);
         }
+        if (this.fallbackHandler) {
+          this.fallbackHandler(input);
+        }
         // Ignore other input during approval
         return;
       }
 
+      if (this.state === 'SOVGUARD_PENDING' && this.pendingSovguardResolve) {
+        if (input === 'y' || input === 'yes') {
+          const resolve = this.pendingSovguardResolve;
+          this.pendingSovguardResolve = null;
+          this.state = 'IDLE';
+          resolve('approve');
+        } else if (input === 'n' || input === 'no') {
+          const resolve = this.pendingSovguardResolve;
+          this.pendingSovguardResolve = null;
+          this.state = 'IDLE';
+          resolve('reject');
+        } else if (input === 'r' || input === 'report') {
+          const resolve = this.pendingSovguardResolve;
+          this.pendingSovguardResolve = null;
+          this.state = 'IDLE';
+          resolve('report');
+        }
+        return;
+      }
+
       // IDLE state — handle commands
-      if (this.state === 'IDLE' && this.commandHandler) {
-        if (['pause', 'resume', 'accept'].includes(input)) {
+      if (this.state === 'IDLE') {
+        if (['pause', 'resume', 'accept'].includes(input) && this.commandHandler) {
           this.commandHandler(input);
+        } else if (this.fallbackHandler) {
+          this.fallbackHandler(input);
         }
       }
     });
@@ -66,6 +105,10 @@ export class Supervisor {
 
   onCommand(handler: (cmd: string) => void): void {
     this.commandHandler = handler;
+  }
+
+  onFallbackCommand(handler: (cmd: string) => void): void {
+    this.fallbackHandler = handler;
   }
 
   async promptWriteApproval(
@@ -107,6 +150,35 @@ export class Supervisor {
     this.state = 'APPROVAL_PENDING';
     return new Promise<boolean>((resolve) => {
       this.pendingResolve = resolve;
+    });
+  }
+
+  async promptSovguardApproval(
+    path: string,
+    score: number,
+    reason?: string,
+  ): Promise<'approve' | 'reject' | 'report'> {
+    console.log('');
+    console.log(chalk.red(`⚠ SOVGUARD  ${path}  BLOCKED (score: ${score.toFixed(2)}${reason ? `, reason: ${reason}` : ''})`));
+    console.log(chalk.cyan('  [Y]es allow / [N]o reject / [R]eport false positive'));
+
+    this.state = 'SOVGUARD_PENDING';
+    return new Promise<'approve' | 'reject' | 'report'>((resolve) => {
+      this.pendingSovguardResolve = resolve;
+    });
+  }
+
+  async promptSovguardFailure(failures: number): Promise<'approve' | 'reject' | 'report'> {
+    console.log('');
+    console.log(chalk.red(`SovGuard API appears down (${failures} consecutive failures).`));
+    console.log(chalk.cyan('  [R]etry / [D]isable scanning for this session / [A]bort session'));
+    console.log(chalk.gray('  (R=Y, D=R, A=N)'));
+
+    this.state = 'SOVGUARD_PENDING';
+    return new Promise<'approve' | 'reject' | 'report'>((resolve) => {
+      this.pendingSovguardResolve = (decision) => {
+        resolve(decision);
+      };
     });
   }
 
