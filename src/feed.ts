@@ -59,6 +59,24 @@ export class Feed {
     console.log(`${this.timestamp()}  ${chalk.red('ERROR')}  ${message}`);
   }
 
+  logSovguardBlock(path: string, score: number, reason?: string): void {
+    const reasonStr = reason ? `, reason: ${reason}` : '';
+    console.log(`${this.timestamp()}  ${chalk.red('⚠ SOVGUARD')}  ${path}  ${chalk.red('BLOCKED')} (score: ${score.toFixed(2)}${reasonStr})`);
+  }
+
+  logSovguardReadScore(path: string, score: number): void {
+    console.log(`${this.timestamp()}  ${chalk.gray('SOVGUARD')}  ${path}  score: ${score.toFixed(2)} ✓`);
+  }
+
+  logSovguardDisabledWarning(): void {
+    console.warn(chalk.yellow('⚠ WARNING: SovGuard disabled — file scanning inactive.'));
+    console.warn(chalk.yellow('  Agent writes will NOT be scanned for malicious content.'));
+  }
+
+  logSovguardUnscanned(path: string, reason: string): void {
+    console.log(`${this.timestamp()}  ${chalk.yellow('⚠ SOVGUARD')}  ${path}  ${chalk.yellow(`unscanned (${reason})`)}`);
+  }
+
   printSummary(): void {
     const duration = Math.floor((Date.now() - this.stats.startedAt) / 1000);
     const minutes = Math.floor(duration / 60);
