@@ -2,6 +2,8 @@
  * Shared types and constants for j41-connect
  */
 
+import type { SovGuardConfig } from './sovguard.js';
+
 // ── Constants ───────────────────────────────────────────────────
 
 export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -32,10 +34,7 @@ export interface WorkspaceConfig {
   mode: WorkspaceMode;
   verbose: boolean;
   apiUrl: string;
-  sovguard?: {
-    apiKey: string;
-    apiUrl: string;
-  };
+  sovguard?: SovGuardConfig;
 }
 
 export interface ExclusionEntry {
@@ -77,4 +76,4 @@ export interface SessionStats {
 }
 
 // Stdin state machine for command/approval coexistence
-export type InputState = 'IDLE' | 'APPROVAL_PENDING';
+export type InputState = 'IDLE' | 'APPROVAL_PENDING' | 'SOVGUARD_PENDING';
