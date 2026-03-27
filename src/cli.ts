@@ -16,11 +16,11 @@ import { Supervisor } from './supervisor.js';
 import { Feed } from './feed.js';
 import { SovGuardClient, SCAN_MAX_BYTES } from './sovguard.js';
 import type { SovGuardScanResult, SovGuardReport } from './sovguard.js';
+import { resolveCredentials, writeConfig, DEFAULT_SOVGUARD_URL } from './config.js';
 
 import { createInterface } from 'readline';
 
 const J41_API_URL = process.env.J41_API_URL || 'https://api.autobb.app';
-const SOVGUARD_API_URL = process.env.SOVGUARD_API_URL || 'https://safechat.autobb.app';
 
 export function parseArgs(argv: string[]): WorkspaceConfig {
   const program = new Command();
@@ -78,10 +78,6 @@ export function parseArgs(argv: string[]): WorkspaceConfig {
   // Determine mode
   const mode = opts.standard ? 'standard' : 'supervised';
 
-  // SovGuard config: CLI flag > env var > prompt
-  const sovguardApiKey = opts.sovguardKey || process.env.SOVGUARD_API_KEY;
-  const sovguardApiUrl = opts.sovguardUrl || process.env.SOVGUARD_API_URL || SOVGUARD_API_URL;
-
   return {
     projectDir,
     uid: opts.uid || '',
@@ -90,7 +86,9 @@ export function parseArgs(argv: string[]): WorkspaceConfig {
     mode,
     verbose: !!opts.verbose,
     apiUrl: J41_API_URL,
-    sovguard: sovguardApiKey ? { apiKey: sovguardApiKey, apiUrl: sovguardApiUrl } : undefined,
+    sovguard: undefined, // resolved in run() via resolveCredentials
+    _cliSovguardKey: opts.sovguardKey,
+    _cliSovguardUrl: opts.sovguardUrl,
   };
 }
 
@@ -146,34 +144,6 @@ function readSecret(prompt: string): Promise<string> {
     };
     stdin.on('data', onData);
   });
-}
-
-async function promptSovguardConfig(): Promise<WorkspaceConfig['sovguard']> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-
-  const ask = (question: string): Promise<string> =>
-    new Promise((resolve) => rl.question(question, (answer) => resolve(answer.trim())));
-
-  console.log('');
-  console.log(chalk.cyan('SovGuard file scanning protects your workspace from malicious writes.'));
-  rl.close();
-
-  const apiKey = (await readSecret('SovGuard API key (or press Enter to skip): ')).trim();
-
-  if (!apiKey) {
-    return undefined;
-  }
-
-  const rl2 = createInterface({ input: process.stdin, output: process.stdout });
-  const urlAnswer = await new Promise<string>((resolve) =>
-    rl2.question(`SovGuard API URL [${SOVGUARD_API_URL}]: `, (answer) => resolve(answer.trim()))
-  );
-  rl2.close();
-
-  return {
-    apiKey,
-    apiUrl: urlAnswer || SOVGUARD_API_URL,
-  };
 }
 
 export function checkGitStatus(projectDir: string): void {
@@ -265,13 +235,48 @@ export async function run(config: WorkspaceConfig): Promise<void> {
     // ── 1. Git check ───────────────────────────────────────────
     checkGitStatus(config.projectDir);
 
-    // ── 1b. SovGuard API key ─────────────────────────────────
-    if (!config.sovguard) {
-      config.sovguard = await promptSovguardConfig();
+    // ── 1b. SovGuard credentials ─────────────────────────────
+    // Resolve through priority chain: CLI flags > env vars > config file > prompt
+    const resolved = resolveCredentials({
+      sovguardKey: config._cliSovguardKey,
+      sovguardUrl: config._cliSovguardUrl,
+    });
+
+    if (resolved.cliKeyUsed) {
+      console.warn(chalk.yellow('⚠ Passing API keys via CLI flags is visible in process lists.'));
+      console.warn(chalk.yellow('  Run \'j41-connect config set\' to store credentials securely.'));
     }
+
+    if (resolved.config) {
+      config.sovguard = resolved.config;
+    } else if (resolved.needsPrompt) {
+      // Interactive first-run prompt
+      console.log('');
+      console.log(chalk.cyan('No SovGuard configuration found.'));
+      const apiKey = (await readSecret('SovGuard API key (or press Enter to skip): ')).trim();
+
+      if (apiKey) {
+        const encKey = (await readSecret('Encryption key (optional, press Enter to skip): ')).trim();
+
+        config.sovguard = {
+          apiKey,
+          apiUrl: DEFAULT_SOVGUARD_URL,
+          encryptionKey: encKey || undefined,
+        };
+
+        // Persist to config file
+        writeConfig({
+          sovguard_api_key: apiKey,
+          sovguard_encryption_key: encKey || undefined,
+        });
+        console.log(chalk.green('✓ Saved to ~/.j41/config'));
+      }
+    }
+
     if (config.sovguard) {
       sovguardClient = new SovGuardClient(config.sovguard);
-      feed.logStatus(`SovGuard file scanning enabled (${config.sovguard.apiUrl})`);
+      const encLabel = sovguardClient.encrypted ? ' (E2E encrypted)' : '';
+      feed.logStatus(`SovGuard file scanning enabled${encLabel} (${config.sovguard.apiUrl})`);
       sovguardClient.purgeOldReports();
     } else {
       feed.logSovguardDisabledWarning();
